@@ -156,7 +156,7 @@ export let _mcpBridgeReady: Promise<void> = Promise.resolve();
 
 // Cached buildAutoInjection (500-token cap, prioritized).
 let _buildAutoInjection:
-  | ((events: Array<{ category: string; data: string }>) => string)
+  | ((events: Array<{ category: string; data: string }>, source?: string) => string)
   | null
   | undefined = undefined;
 
@@ -166,7 +166,7 @@ let _buildAutoInjection:
 let _pendingContext = "";
 async function getAutoInjection(
   pluginRoot: string,
-): Promise<((events: Array<{ category: string; data: string }>) => string) | null> {
+): Promise<((events: Array<{ category: string; data: string }>, source?: string) => string) | null> {
   if (_buildAutoInjection !== undefined) return _buildAutoInjection;
   try {
     const mod = await import(
@@ -638,14 +638,6 @@ export default function piExtension(pi: any): void {
 
       const prompt = String(event?.prompt ?? "");
 
-      // Extract user events from the prompt text
-      if (prompt) {
-        const userEvents = extractUserEvents(prompt);
-        for (const ev of userEvents) {
-          db.insertEvent(_sessionId, ev as SessionEvent, "UserPromptSubmit", _attribution);
-        }
-      }
-
       const existingPrompt = String(event?.systemPrompt ?? "");
       const parts: string[] = [];
       if (existingPrompt) parts.push(existingPrompt);
@@ -666,21 +658,33 @@ export default function piExtension(pi: any): void {
       // capped at 500 tokens via buildAutoInjection. Falls back to inline
       // budget loop if the helper is unavailable.
       //
+      // The active_memory query runs BEFORE the current prompt's events are
+      // inserted into the DB. Otherwise the model's own message gets classified
+      // (e.g. "hello" → intent:implement) and immediately echoed back as a
+      // <session_state> directive on the same turn — the model sees its own
+      // greeting reflected as a standing instruction.
+      //
       // Issue #856 — do NOT re-inject `role` as a standing behavioral_directive
       // on every turn. A casual past phrase that classified as a role would
       // otherwise be pinned and replayed each turn ("since you said 'that's
-      // fine for now', I'll leave it"), producing a do-nothing loop. Defense in
-      // depth: even if a stale `role` event exists (from an older build, or a
-      // genuine persona the user has since moved past), it must not become an
-      // inescapable per-turn standing order. Role events stay in the DB and
-      // remain queryable via ctx_search(source: "session-events"); intent,
-      // skills, decisions, and the resume snapshot are unaffected.
+      // fine for now', I'll leave it"), producing a do-nothing loop. The same
+      // applies to `intent` — a short greeting classified as "implement" must
+      // not become <session_mode>implement</session_mode> pinned every turn.
+      // Defense in depth: even if a stale `role` or `intent` event exists
+      // (from an older build, or a genuine persona the user has since moved
+      // past), it must not become an inescapable per-turn standing order.
+      // Role and intent events stay in the DB and remain queryable via
+      // ctx_search(source: "session-events"); skills, decisions, and the
+      // resume snapshot are unaffected.
       const activeEvents = db
         .getEvents(_sessionId, {
           minPriority: 3,
           limit: 50,
         })
-        .filter((e: any) => String(e.category ?? "") !== "role");
+        .filter((e: any) => {
+          const c = String(e.category ?? "");
+          return c !== "role" && c !== "intent";
+        });
       if (activeEvents.length > 0) {
         const buildAuto = await getAutoInjection(pluginRoot);
         let memoryContext = "";
@@ -690,6 +694,7 @@ export default function piExtension(pi: any): void {
               category: String(e.category ?? ""),
               data: String(e.data ?? ""),
             })),
+            "active-memory",
           );
         }
         // Fallback (or if helper produced empty output): inline 500-token cap.
@@ -713,6 +718,17 @@ export default function piExtension(pi: any): void {
       if (resume && !resume.consumed && resume.snapshot) {
         parts.push(resume.snapshot);
         db.markResumeConsumed(_sessionId);
+      }
+
+      // Extract user events from the prompt text and persist them AFTER the
+      // active_memory query and resume read. This ensures only prior-turn
+      // state is injected — the current prompt's events become available on
+      // the next turn and after compaction, which is what active_memory is for.
+      if (prompt) {
+        const userEvents = extractUserEvents(prompt);
+        for (const ev of userEvents) {
+          db.insertEvent(_sessionId, ev as SessionEvent, "UserPromptSubmit", _attribution);
+        }
       }
 
       // Store extra context (routing anchor, active_memory, resume, behavioralDirective)

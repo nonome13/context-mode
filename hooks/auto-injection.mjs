@@ -25,9 +25,12 @@ export function estimateTokens(text) {
 /**
  * Build auto-injection block from session events.
  * @param {Array<{category: string, data: string}>} events
+ * @param {string} [source="compaction"] — label for the <session_state> wrapper.
+ *   "compaction" for post-compact injection (Claude Code, OpenCode).
+ *   "active-memory" for per-turn injection (Pi).
  * @returns {string} XML block or empty string
  */
-export function buildAutoInjection(events) {
+export function buildAutoInjection(events, source = "compaction") {
   // Single O(N) pass instead of 4× O(N) Array.filter() loops. UserPromptSubmit
   // fires this on every prompt; with N up to 100 events the prior implementation
   // walked the array 4 times per prompt — wasteful on macOS, painful on Windows
@@ -98,5 +101,5 @@ export function buildAutoInjection(events) {
   }
 
   if (parts.length === 0) return "";
-  return `<session_state source="compaction">\n\n${parts.join("\n\n")}\n\n</session_state>`;
+  return `<session_state source="${source}">\n\n${parts.join("\n\n")}\n\n</session_state>`;
 }
