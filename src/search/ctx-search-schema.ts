@@ -95,7 +95,12 @@ export function buildCtxSearchInputSchema(isSharedMode: boolean) {
     source: z
       .string()
       .optional()
-      .describe("Filter to a specific indexed source (partial match)."),
+      .describe(
+        "Filter to a specific indexed source (partial match). " +
+          "Common session-memory source labels: decision (user corrections / preferences), " +
+          "error / error-resolution (past failures + their fixes), blocker, plan, " +
+          "user-prompt, rejected-approach, compaction (post-compact session guide).",
+      ),
     contentType: z
       .enum(["code", "prose"])
       .optional()
