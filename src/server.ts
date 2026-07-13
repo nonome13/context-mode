@@ -69,6 +69,7 @@ import { getHookScriptPaths } from "./util/hook-config.js";
 import { stripJsonComments } from "./util/jsonc.js";
 import { resolveClaudeConfigDir } from "./util/claude-config.js";
 import { resolveProjectDir } from "./util/project-dir.js";
+import { applyToolOverride, loadToolsConfig, resolveToolsConfigPath } from "./util/tools-config.js";
 import { loadDatabase } from "./db-base.js";
 import { AnalyticsEngine, formatReport, getConversationStats, getContentBytesAllSessions, getConversationWindowStats, getLifetimeStats, getMultiAdapterLifetimeStats, getRealBytesStats, pricePerToken } from "./session/analytics.js";
 const __pkg_dir = dirname(fileURLToPath(import.meta.url));
@@ -274,6 +275,20 @@ export function registerEmptyToolsListHandler(target: McpServer = server): void 
   target.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
 }
 
+// Optional, opt-in per-tool overrides (description/title text, or fully
+// disabling a tool) read from ctx-tools.json — see util/tools-config.ts for
+// the file format, precedence, and fail-safe validation rules. Loaded once at
+// module init; absent/invalid file is silently equivalent to "no overrides".
+const TOOLS_CONFIG_PATH = resolveToolsConfigPath();
+const TOOLS_CONFIG = loadToolsConfig(TOOLS_CONFIG_PATH);
+
+const __toolDisabledDiagnosticsEmitted = new Set<string>();
+function emitToolDisabledDiagnostic(name: string): void {
+  if (__toolDisabledDiagnosticsEmitted.has(name)) return;
+  __toolDisabledDiagnosticsEmitted.add(name);
+  process.stderr.write(`[context-mode] ${name} disabled via ${TOOLS_CONFIG_PATH} (ctx-tools.json)\n`);
+}
+
 const originalRegisterTool = server.registerTool.bind(server);
 (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (...args: unknown[]) => {
   const [name, config, handler] = args as [
@@ -285,10 +300,14 @@ const originalRegisterTool = server.registerTool.bind(server);
     emitSuppressionDiagnostic();
     return undefined;
   }
+  const patchedConfig = applyToolOverride(name, config, TOOLS_CONFIG);
+  if (patchedConfig === null) {
+    emitToolDisabledDiagnostic(name);
+    return undefined;
+  }
   const wrappedHandler = wrapToolHandler(name, handler);
-  REGISTERED_CTX_TOOLS.push({ name, config, handler: wrappedHandler });
-  args[2] = wrappedHandler;
-  return (originalRegisterTool as unknown as (...callArgs: unknown[]) => unknown)(...args);
+  REGISTERED_CTX_TOOLS.push({ name, config: patchedConfig, handler: wrappedHandler });
+  return (originalRegisterTool as unknown as (...callArgs: unknown[]) => unknown)(name, patchedConfig, wrappedHandler);
 };
 
 function wrapToolHandler(

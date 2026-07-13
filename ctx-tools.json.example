@@ -1,0 +1,14 @@
+{
+  // Disable a tool you never use
+  "ctx_insight": { "enabled": false },
+
+  // Iterate on tool descriptions without rebuilding
+  "ctx_execute": {
+    "description": "Run code in a sandbox. Only stdout enters context."
+  },
+
+  // Change the title shown in host approval UIs
+  "ctx_search": {
+    "title": "Search Knowledge Base"
+  }
+}
