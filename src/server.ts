@@ -28,6 +28,7 @@ import {
   getRuntimeSummary,
   getAvailableLanguages,
   hasBunRuntime,
+  type Language,
 } from "./runtime.js";
 import { classifyNonZeroExit } from "./exit-classify.js";
 import { startLifecycleGuard, noteMcpActivity, noteRequestStart, noteRequestEnd, attachMcpActivityTap } from "./lifecycle.js";
@@ -1265,6 +1266,18 @@ const bunNote = hasBunRuntime()
   ? " (Bun detected — JS/TS runs 3-5x faster)"
   : "";
 
+// Dynamic language enum — only runtimes actually installed on this machine.
+// The enum is the single source of truth for what the model can request;
+// no "try and fail" dance for uninstalled languages. Javascript and shell
+// are always present (shell is the host shell, javascript is the MCP
+// server's own runtime). The rest are probed by detectRuntimes() at boot.
+const AVAILABLE_LANGUAGES: [Language, ...Language[]] = available.length > 0
+  ? available as [Language, ...Language[]]
+  : ["javascript", "shell"] as [Language, ...Language[]];
+const languageParamDescription =
+  "Runtime language. Only installed runtimes appear in the enum." +
+  (hasBunRuntime() ? " Bun detected — javascript and typescript run 3-5x faster." : "");
+
 // ─────────────────────────────────────────────────────────
 // Helper: smart snippet extraction — returns windows around
 // matching query terms instead of dumb truncation
@@ -1676,7 +1689,7 @@ server.registerTool(
       idempotentHint: false,
       openWorldHint: true,
     },
-    description: `Run code in a sandboxed subprocess.${bunNote} Languages: ${langList}.
+    description: `Run code in a sandboxed subprocess. Only what you console.log() enters your conversation — the raw bytes stay in the sandbox.
 
 Think-in-Code — the core philosophy: the bytes your code processes never enter your conversation memory; only what you console.log() does. Reading a 700 KB log directly means 700 KB of your remaining reasoning capacity gets spent on raw bytes. Running code over that same log in this sandbox and printing a 3 KB summary leaves you with 697 KB of capacity for the actual work.
 
@@ -1710,21 +1723,8 @@ EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_p
 EXAMPLE: ctx_execute(language: "javascript", code: "const out = require('child_process').execSync('gh issue list --json number,title --limit 100', {encoding:'utf8'}); const hooks = JSON.parse(out).filter(i => /hook|routing/i.test(i.title)); console.log(\`\${hooks.length} hook-related issues\`)")`,
     inputSchema: z.object({
       language: z
-        .enum([
-          "javascript",
-          "typescript",
-          "python",
-          "shell",
-          "ruby",
-          "go",
-          "rust",
-          "php",
-          "perl",
-          "r",
-          "elixir",
-          "csharp",
-        ])
-        .describe("Runtime language"),
+        .enum(AVAILABLE_LANGUAGES)
+        .describe(languageParamDescription),
       code: z
         .string()
         .describe(
@@ -2097,21 +2097,8 @@ EXAMPLE: ctx_execute_file(path: "data.csv", language: "javascript", code: "const
         .string()
         .describe("Absolute file path or relative to project root"),
       language: z
-        .enum([
-          "javascript",
-          "typescript",
-          "python",
-          "shell",
-          "ruby",
-          "go",
-          "rust",
-          "php",
-          "perl",
-          "r",
-          "elixir",
-          "csharp",
-        ])
-        .describe("Runtime language"),
+        .enum(AVAILABLE_LANGUAGES)
+        .describe(languageParamDescription),
       code: z
         .string()
         .describe(
