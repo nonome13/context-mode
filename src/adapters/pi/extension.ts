@@ -744,22 +744,69 @@ export default function piExtension(pi: any): void {
     }
   });
 
-  // ── 4a2. context — Inject active_memory + resume + behavioralDirective as message ──
-  // Uses the 'context' hook (like hindsight does) to append context at the END of
-  // messages rather than mutating systemPrompt at the beginning. This preserves
-  // prefix prompt cache for DeepSeek, Anthropic, and OpenAI.
-  pi.on("context", (event: any) => {
+  // ── 4a2. before_provider_request — Inject context as a SYSTEM message ──
+  //
+  // WHY NOT the 'context' hook? Pi's context hook operates on the *abstract*
+  // message array, which Pi then serializes to the provider's native format.
+  // That serialization layer drops trailing role:"system" messages because
+  // Anthropic's API has no system role in the messages array (system is a
+  // top-level param). So pushing { role: "system" } via the context hook
+  // silently disappears before reaching the wire. (Tried in 9b809ed, reverted
+  // in b9151f6.)
+  //
+  // before_provider_request fires AFTER serialization — event.payload is the
+  // provider-native payload that goes on the wire. We inject directly into it,
+  // with a provider-specific strategy to preserve prefix prompt cache (#822):
+  //
+  //   - OpenAI-compatible (payload.messages array, no payload.system):
+  //     Push { role: "system" } at the END of messages. The prefix
+  //     (messages[0..N-1]) is untouched → prefix cache hits. The trailing
+  //     system message is uncached but always changing anyway (active_memory).
+  //     This gives the correct semantic role (system, not user turn) without
+  //     cache regression vs the old context-hook approach.
+  //
+  //   - Anthropic (payload.system is a string or content-block array):
+  //     Anthropic cannot represent role:"system" inside messages — system is
+  //     a top-level param only. Appending to payload.system would change it
+  //     every turn and invalidate the system-level prefix cache (#822
+  //     regression). Fall back to the old behavior: append { role: "user" }
+  //     to payload.messages. Cache is preserved (messages prefix untouched);
+  //     the semantic role is "user" — a known compromise, but no worse than
+  //     before this patch.
+  pi.on("before_provider_request", (event: any) => {
     try {
       if (!_pendingContext) return;
       const ctx = _pendingContext;
       _pendingContext = "";
-      event.messages.push({
-        role: "user",
-        content: ctx,
-      });
-      return { messages: event.messages };
+
+      const payload = event?.payload;
+      if (!payload || typeof payload !== "object") return;
+
+      // Anthropic Messages API: system is a top-level param.
+      // Cannot use role:"system" in messages — fall back to role:"user"
+      // to preserve the system-level prefix cache (#822).
+      if (payload.system !== undefined) {
+        if (Array.isArray(payload.messages)) {
+          return {
+            ...payload,
+            messages: [...payload.messages, { role: "user", content: ctx }],
+          };
+        }
+        return; // Anthropic payload without messages — can't inject safely
+      }
+
+      // OpenAI-compatible: messages is an array, no top-level system param.
+      // Push role:"system" at the end — prefix cache preserved.
+      if (Array.isArray(payload.messages)) {
+        return {
+          ...payload,
+          messages: [...payload.messages, { role: "system", content: ctx }],
+        };
+      }
+
+      // Unknown payload shape — can't inject safely, drop silently.
     } catch {
-      // best effort — never break context assembly
+      // best effort — never break the provider request
     }
   });
 

@@ -668,19 +668,22 @@ describe("Pi Extension", () => {
       });
       expect(result?.systemPrompt ?? null).toBe(null);
 
-      // The context hook should deliver the resume as a trailing user message.
+      // before_provider_request injects the resume as a trailing system message
+      // (OpenAI-compatible shape: payload.messages array, no payload.system).
       const messages = [{ role: "system", content: "You are a helpful assistant." }];
-      const ctxResult = await api._trigger("context", { messages });
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages },
+      });
 
-      expect(ctxResult?.messages).toBe(messages);
-      expect(messages).toHaveLength(2);
-      expect(messages[0]).toEqual({
+      expect(ctxResult?.payload?.messages).toBeDefined();
+      expect(ctxResult.payload.messages).toHaveLength(2);
+      expect(ctxResult.payload.messages[0]).toEqual({
         role: "system",
         content: "You are a helpful assistant.",
       });
-      expect(messages[1].role).toBe("user");
-      expect(String(messages[1].content)).toContain("session_resume");
-      expect(String(messages[1].content)).not.toContain("You are a helpful assistant.");
+      expect(ctxResult.payload.messages[1].role).toBe("system");
+      expect(String(ctxResult.payload.messages[1].content)).toContain("session_resume");
+      expect(String(ctxResult.payload.messages[1].content)).not.toContain("You are a helpful assistant.");
     });
 
     it("appends resume and active context after existing messages", async () => {
@@ -716,15 +719,17 @@ describe("Pi Extension", () => {
         { role: "system", content: "Stable system prompt." },
         { role: "user", content: "Continue with the refactor." },
       ];
-      const ctxResult = await api._trigger("context", { messages });
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages },
+      });
 
-      expect(ctxResult?.messages).toBe(messages);
-      expect(messages).toHaveLength(3);
-      expect(messages[0]).toEqual({ role: "system", content: "Stable system prompt." });
-      expect(messages[1]).toEqual({ role: "user", content: "Continue with the refactor." });
-      expect(messages[2].role).toBe("user");
+      expect(ctxResult?.payload?.messages).toBeDefined();
+      expect(ctxResult.payload.messages).toHaveLength(3);
+      expect(ctxResult.payload.messages[0]).toEqual({ role: "system", content: "Stable system prompt." });
+      expect(ctxResult.payload.messages[1]).toEqual({ role: "user", content: "Continue with the refactor." });
+      expect(ctxResult.payload.messages[2].role).toBe("system");
 
-      const trailing = String(messages[2].content);
+      const trailing = String(ctxResult.payload.messages[2].content);
       expect(trailing).toContain("context-mode active");
       expect(trailing).toContain("session_resume");
       expect(trailing).toContain("how_to_search");
@@ -912,15 +917,18 @@ describe("Pi Extension", () => {
         systemPrompt: "Base prompt.",
       });
 
-      // context hook now injects the routing anchor as a user message at message end
+      // before_provider_request injects the routing anchor as a system message
+      // (OpenAI-compatible shape: payload.messages array, no payload.system).
       const messages: any[] = [];
-      const ctxResult = await api._trigger("context", { messages });
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages },
+      });
 
-      expect(ctxResult?.messages).toBeDefined();
-      expect(ctxResult.messages.length).toBe(1);
-      expect(ctxResult.messages[0].role).toBe("user");
-      expect(ctxResult.messages[0].content).toContain("context-mode active");
-      expect(ctxResult.messages[0].content).toContain("ctx_batch_execute > ctx_execute > ctx_execute_file");
+      expect(ctxResult?.payload?.messages).toBeDefined();
+      expect(ctxResult.payload.messages.length).toBe(1);
+      expect(ctxResult.payload.messages[0].role).toBe("system");
+      expect(ctxResult.payload.messages[0].content).toContain("context-mode active");
+      expect(ctxResult.payload.messages[0].content).toContain("ctx_batch_execute > ctx_execute > ctx_execute_file");
     });
 
     it("re-injects the anchor via context hook on every subsequent call", async () => {
@@ -936,9 +944,11 @@ describe("Pi Extension", () => {
 
       for (let call = 0; call < 3; call++) {
         await api._trigger("before_agent_start", { systemPrompt: "Base." });
-        const ctxResult = await api._trigger("context", { messages: [] });
-        expect(ctxResult?.messages).toBeDefined();
-        expect(ctxResult.messages[0]?.content).toContain(ANCHOR);
+        const ctxResult = await api._trigger("before_provider_request", {
+          payload: { messages: [] },
+        });
+        expect(ctxResult?.payload?.messages).toBeDefined();
+        expect(ctxResult.payload.messages[0]?.content).toContain(ANCHOR);
       }
     });
   });
@@ -1001,15 +1011,18 @@ describe("Pi Extension", () => {
         systemPrompt: "Base 2.",
       });
 
-      // context hook injects the pending context as a user message
-      const ctxResult = await api._trigger("context", { messages: [] });
+      // before_provider_request injects the pending context as a system message
+      // (OpenAI-compatible shape: payload.messages array, no payload.system).
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages: [] },
+      });
 
-      expect(ctxResult?.messages).toBeDefined();
-      expect(ctxResult.messages.length).toBe(1);
-      expect(ctxResult.messages[0].role).toBe("user");
+      expect(ctxResult?.payload?.messages).toBeDefined();
+      expect(ctxResult.payload.messages.length).toBe(1);
+      expect(ctxResult.payload.messages[0].role).toBe("system");
       // The always-on injection path fires every turn — the routing anchor
       // proves context reaches the model even with compact_count 0.
-      const content = String(ctxResult.messages[0].content);
+      const content = String(ctxResult.payload.messages[0].content);
       expect(content).toContain("context-mode active");
       // Issue #856 — the role MUST NOT be pinned as a standing directive.
       expect(content).not.toContain("<behavioral_directive>");
@@ -1034,8 +1047,10 @@ describe("Pi Extension", () => {
         systemPrompt: "Base final.",
       });
 
-      const ctxResult = await api._trigger("context", { messages: [] });
-      const content = String(ctxResult?.messages?.[0]?.content ?? "");
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages: [] },
+      });
+      const content = String(ctxResult?.payload?.messages?.[0]?.content ?? "");
       // Issue #856 — flooding with role prompts must NOT accumulate any
       // behavioral_directive, and the per-turn injection must stay bounded
       // (it is now just the routing anchor; roles are filtered out entirely).
@@ -1069,8 +1084,10 @@ describe("Pi Extension", () => {
 
       // Subsequent turn rebuilds context.
       await api._trigger("before_agent_start", { systemPrompt: "Base 2." });
-      const ctxResult = await api._trigger("context", { messages: [] });
-      const content = String(ctxResult?.messages?.[0]?.content ?? "");
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages: [] },
+      });
+      const content = String(ctxResult?.payload?.messages?.[0]?.content ?? "");
 
       // The stale role must NOT be pinned as a standing behavioral_directive.
       expect(content).not.toContain("<behavioral_directive>");
@@ -1088,8 +1105,10 @@ describe("Pi Extension", () => {
         systemPrompt: "Base.",
       });
       await api._trigger("before_agent_start", { systemPrompt: "Base 2." });
-      const ctxResult = await api._trigger("context", { messages: [] });
-      const content = String(ctxResult?.messages?.[0]?.content ?? "");
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: { messages: [] },
+      });
+      const content = String(ctxResult?.payload?.messages?.[0]?.content ?? "");
 
       // Role filtered out…
       expect(content).not.toContain("<behavioral_directive>");
@@ -1097,6 +1116,66 @@ describe("Pi Extension", () => {
       // still reaches the model every turn (filter is role-specific, not a
       // blanket drop of the whole context injection).
       expect(content).toContain("context-mode active");
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Slice 9c: Anthropic fallback — system role is impossible in
+  // Anthropic's messages array, so we fall back to role:"user" to
+  // preserve the system-level prefix cache (#822).
+  // ═══════════════════════════════════════════════════════════
+
+  describe("Slice 9c: Anthropic fallback preserves cache (#822)", () => {
+    it("falls back to role:user when payload.system is present (Anthropic)", async () => {
+      await registerPiExtension(api);
+      await api._trigger("session_start", {
+        sessionManager: { getSessionFile: () => `anthropic-1-${Date.now()}-${Math.random()}` },
+      });
+
+      await api._trigger("before_agent_start", { systemPrompt: "Base." });
+
+      // Anthropic Messages API: top-level system param + messages array.
+      // The handler MUST NOT touch payload.system (would invalidate cache)
+      // and MUST inject as role:"user" in payload.messages.
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: {
+          system: "You are a helpful assistant.",
+          messages: [{ role: "user", content: "hi" }],
+        },
+      });
+
+      expect(ctxResult?.payload).toBeDefined();
+      // system param untouched — prefix cache preserved.
+      expect(ctxResult.payload.system).toBe("You are a helpful assistant.");
+      // Injected at the end of messages as role:user (Anthropic fallback).
+      expect(ctxResult.payload.messages).toHaveLength(2);
+      expect(ctxResult.payload.messages[0]).toEqual({ role: "user", content: "hi" });
+      expect(ctxResult.payload.messages[1].role).toBe("user");
+      expect(String(ctxResult.payload.messages[1].content)).toContain("context-mode active");
+    });
+
+    it("uses role:system when payload.system is absent (OpenAI-compatible)", async () => {
+      await registerPiExtension(api);
+      await api._trigger("session_start", {
+        sessionManager: { getSessionFile: () => `openai-1-${Date.now()}-${Math.random()}` },
+      });
+
+      await api._trigger("before_agent_start", { systemPrompt: "Base." });
+
+      // OpenAI-compatible: no top-level system param, messages array only.
+      const ctxResult = await api._trigger("before_provider_request", {
+        payload: {
+          messages: [{ role: "user", content: "hi" }],
+        },
+      });
+
+      expect(ctxResult?.payload).toBeDefined();
+      expect(ctxResult.payload.system).toBeUndefined();
+      expect(ctxResult.payload.messages).toHaveLength(2);
+      expect(ctxResult.payload.messages[0]).toEqual({ role: "user", content: "hi" });
+      // OpenAI-compatible gets the correct semantic role: system.
+      expect(ctxResult.payload.messages[1].role).toBe("system");
+      expect(String(ctxResult.payload.messages[1].content)).toContain("context-mode active");
     });
   });
 
