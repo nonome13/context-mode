@@ -763,21 +763,13 @@ export default function piExtension(pi: any): void {
   // Uses the 'context' hook (like hindsight does) to append context at the END of
   // messages rather than mutating systemPrompt at the beginning. This preserves
   // prefix prompt cache for DeepSeek, Anthropic, and OpenAI.
-  //
-  // The injected message uses role: "system" (not role: "user") so the model
-  // treats it as operational context, not as a user instruction. The original
-  // role: "user" caused the model to interpret the routing anchor + active_memory
-  // as a second user turn — e.g. sending "hello" produced a reply acknowledging
-  // the tool hierarchy instead of a natural greeting. role: "system" at the end
-  // of messages preserves recency salience (last message before generation)
-  // while giving the content the correct semantic role.
   pi.on("context", (event: any) => {
     try {
       if (!_pendingContext) return;
       const ctx = _pendingContext;
       _pendingContext = "";
       event.messages.push({
-        role: "system",
+        role: "user",
         content: ctx,
       });
       return { messages: event.messages };
